@@ -227,8 +227,71 @@ graph TD
     API -->|Read Transactions & Summary| Postgres
 ```
 
+```
+
+### Deep Dive: Processing Sequence & LLM Retry Logic
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant API as FastAPI Web Server
+    participant DB as PostgreSQL
+    participant Redis
+    participant Worker as Celery Worker
+    participant LLM as Gemini API / Fallback
+
+    User->>API: POST /jobs/upload (CSV)
+    API->>DB: Insert Job (status: 'pending')
+    API->>Redis: Enqueue process_transaction_job(job_id)
+    API-->>User: Return job_id
+
+    Redis-->>Worker: Dequeue Job
+    Worker->>DB: Update Job (status: 'processing')
+    
+    note over Worker: Phase 1: Data Normalization
+    Worker->>Worker: Parse CSV & Drop Duplicates
+    Worker->>Worker: Format Amounts & Dates
+    
+    note over Worker: Phase 2: Anomaly Engine
+    Worker->>Worker: Calculate account medians
+    Worker->>Worker: Flag >3x median amounts
+    Worker->>Worker: Flag domestic-only USD spends
+    
+    note over Worker, LLM: Phase 3: AI Categorization (Batched)
+    Worker->>Worker: Extract 'Uncategorised' rows
+    loop Every 50 transactions
+        Worker->>LLM: Request Categories (JSON)
+        alt Success
+            LLM-->>Worker: JSON Mapping (ID -> Category)
+        else HTTP 429/503/Timeout
+            Worker->>Worker: Exponential Backoff (Wait & Retry up to 3x)
+            Worker->>LLM: Retry Request
+        else All Retries Failed or No API Key
+            LLM-->>Worker: Fallback Mock Rules
+        end
+    end
+    
+    Worker->>DB: Bulk Insert Cleaned & Flagged Transactions
+    
+    note over Worker, LLM: Phase 4: Narrative Summary
+    Worker->>Worker: Compute Aggregates (Top merchants, Total Spend)
+    Worker->>LLM: Generate Narrative JSON
+    LLM-->>Worker: Narrative String & Risk Level
+    
+    Worker->>DB: Insert JobSummary
+    Worker->>DB: Update Job (status: 'completed', set timestamps)
+    
+    loop Polling
+        User->>API: GET /jobs/{job_id}/results
+        API->>DB: Fetch Results
+        DB-->>API: Data
+        API-->>User: JSON Payload (Anomalies, Breakdown, Narrative)
+    end
+```
 
 ### Data Model
+
 
 **`jobs`**
 
