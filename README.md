@@ -10,8 +10,8 @@ An asynchronous backend system that ingests financial transaction CSVs, cleans a
 
 ```bash
 # 1. Clone the repository
-git clone <your-repo-url>
-cd <repo-dir>
+git clone https://github.com/prakhar-developer/alemeno.git
+cd alemeno
 
 # 2. (Optional) Set your Gemini API key for real LLM calls
 #    Without it the pipeline runs perfectly using the built-in mock classifier
@@ -155,48 +155,48 @@ graph TD
     classDef llm fill:#fdf2f8,stroke:#db2777,stroke-width:2px;
 
     subgraph Client Space
-        C["Client / User"]:::client
+        C[Client]:::client
     end
 
     subgraph FastAPI Web Service
-        API["FastAPI Router"]:::web
-        Val{"File CSV?"}:::web
+        API[FastAPI Router]:::web
+        Val{File is CSV}:::web
     end
 
     subgraph Messaging Broker
-        Redis["Redis Queue"]:::queue
+        Redis[Redis Queue]:::queue
     end
 
     subgraph Celery Worker Service
-        Task["process_transaction_job"]:::worker
-        Clean["Data Cleaning & Dedup"]:::worker
-        Anomaly["Anomaly Checking"]:::worker
-        UncatDecision{"Has Uncategorised?"}:::worker
-        BatchLLM["Classify Transactions Batch"]:::worker
-        NarrativeLLM["Generate Narrative Summary"]:::worker
+        Task[Process Transaction Job]:::worker
+        Clean[Data Cleaning]:::worker
+        Anomaly[Anomaly Checking]:::worker
+        UncatDecision{Has Uncategorised}:::worker
+        BatchLLM[Classify Transactions Batch]:::worker
+        NarrativeLLM[Generate Narrative Summary]:::worker
     end
 
     subgraph Database Layer
-        Postgres[("PostgreSQL DB")]:::db
+        Postgres[(PostgreSQL DB)]:::db
     end
 
     subgraph AI Foundation Layer
-        Gemini["Gemini 2.5 Flash API"]:::llm
-        Mock["Fallback Classifier"]:::llm
+        Gemini[Gemini 2.5 Flash API]:::llm
+        Mock[Fallback Classifier]:::llm
     end
 
     %% Upload Flow %%
     C -->|1. POST /jobs/upload| API
     API --> Val
-    Val -->|No| Reject["400 Bad Request"]:::web
-    Val -->|Yes| SaveFile["Save CSV locally"]:::web
-    SaveFile --> CreateJob["Create Job: status=pending"]:::web
+    Val -->|No| Reject[400 Bad Request]:::web
+    Val -->|Yes| SaveFile[Save CSV locally]:::web
+    SaveFile --> CreateJob[Create Job status pending]:::web
     CreateJob -->|Write| Postgres
     CreateJob -->|2. process_transaction_job.delay| Redis
     Redis -->|3. Dequeue Job| Task
 
     %% Worker Processing Pipeline %%
-    Task -->|Update status=processing| Postgres
+    Task -->|Update status processing| Postgres
     Task --> Clean
     Clean --> Anomaly
     Anomaly --> UncatDecision
@@ -205,26 +205,26 @@ graph TD
     UncatDecision -->|No| SaveTxns
     
     BatchLLM -->|Call with Key| Gemini
-    BatchLLM -->|Retry / Failure| Mock
+    BatchLLM -->|Retry or Failure| Mock
     Gemini -->|Returns JSON Categories| SaveTxns
     Mock -->|Fallback Categories| SaveTxns
     
-    SaveTxns["Save Transactions to DB"]:::worker -->|Write Rows| Postgres
-    SaveTxns --> ComputeStats["Calculate Aggregates"]:::worker
+    SaveTxns[Save Transactions to DB]:::worker -->|Write Rows| Postgres
+    SaveTxns --> ComputeStats[Calculate Aggregates]:::worker
     ComputeStats --> NarrativeLLM
     
     NarrativeLLM -->|Call with Key| Gemini
-    NarrativeLLM -->|Retry / Failure| Mock
+    NarrativeLLM -->|Retry or Failure| Mock
     Gemini -->|Returns JSON Summary| SaveSummary
     Mock -->|Fallback Summary| SaveSummary
     
-    SaveSummary["Save JobSummary & Complete"]:::worker -->|Write Summary & status=completed| Postgres
+    SaveSummary[Save JobSummary and Complete]:::worker -->|Write Summary and status completed| Postgres
 
     %% Polling Flow %%
     C -->|4. GET /jobs/job_id/status| API
     API -->|Read Status| Postgres
     C -->|5. GET /jobs/job_id/results| API
-    API -->|Read Transactions & Summary| Postgres
+    API -->|Read Transactions and Summary| Postgres
 ```
 
 
@@ -235,58 +235,58 @@ graph TD
 sequenceDiagram
     autonumber
     actor User
-    participant API as "FastAPI Web Server"
-    participant DB as "PostgreSQL"
+    participant API as FastAPI Web Server
+    participant DB as PostgreSQL
     participant Redis
-    participant Worker as "Celery Worker"
-    participant LLM as "Gemini API / Fallback"
+    participant Worker as Celery Worker
+    participant LLM as Gemini API
 
-    User->>API: POST /jobs/upload (CSV)
-    API->>DB: Insert Job (status: 'pending')
-    API->>Redis: Enqueue process_transaction_job(job_id)
+    User->>API: POST /jobs/upload CSV
+    API->>DB: Insert Job status pending
+    API->>Redis: Enqueue process_transaction_job
     API-->>User: Return job_id
 
     Redis-->>Worker: Dequeue Job
-    Worker->>DB: Update Job (status: 'processing')
+    Worker->>DB: Update Job status processing
     
-    note over Worker: Phase 1: Data Normalization
-    Worker->>Worker: Parse CSV & Drop Duplicates
-    Worker->>Worker: Format Amounts & Dates
+    note over Worker: Phase 1 Data Normalization
+    Worker->>Worker: Parse CSV and Drop Duplicates
+    Worker->>Worker: Format Amounts and Dates
     
-    note over Worker: Phase 2: Anomaly Engine
+    note over Worker: Phase 2 Anomaly Engine
     Worker->>Worker: Calculate account medians
-    Worker->>Worker: Flag >3x median amounts
-    Worker->>Worker: Flag domestic-only USD spends
+    Worker->>Worker: Flag over 3x median amounts
+    Worker->>Worker: Flag domestic USD spends
     
-    note over Worker, LLM: Phase 3: AI Categorization (Batched)
-    Worker->>Worker: Extract 'Uncategorised' rows
+    note over Worker, LLM: Phase 3 AI Categorization
+    Worker->>Worker: Extract Uncategorised rows
     loop Every 50 transactions
-        Worker->>LLM: Request Categories (JSON)
+        Worker->>LLM: Request Categories
         alt Success
-            LLM-->>Worker: JSON Mapping (ID -> Category)
-        else HTTP 429/503/Timeout
-            Worker->>Worker: Exponential Backoff (Wait & Retry up to 3x)
+            LLM-->>Worker: JSON Mapping
+        else HTTP 429 or 503 Timeout
+            Worker->>Worker: Exponential Backoff and Retry
             Worker->>LLM: Retry Request
         else All Retries Failed or No API Key
             LLM-->>Worker: Fallback Mock Rules
         end
     end
     
-    Worker->>DB: Bulk Insert Cleaned & Flagged Transactions
+    Worker->>DB: Bulk Insert Cleaned and Flagged Transactions
     
-    note over Worker, LLM: Phase 4: Narrative Summary
-    Worker->>Worker: Compute Aggregates (Top merchants, Total Spend)
+    note over Worker, LLM: Phase 4 Narrative Summary
+    Worker->>Worker: Compute Aggregates
     Worker->>LLM: Generate Narrative JSON
-    LLM-->>Worker: Narrative String & Risk Level
+    LLM-->>Worker: Narrative String and Risk Level
     
     Worker->>DB: Insert JobSummary
-    Worker->>DB: Update Job (status: 'completed', set timestamps)
+    Worker->>DB: Update Job status completed and set timestamps
     
     loop Polling
-        User->>API: GET /jobs/{job_id}/results
+        User->>API: GET /jobs/job_id/results
         API->>DB: Fetch Results
         DB-->>API: Data
-        API-->>User: JSON Payload (Anomalies, Breakdown, Narrative)
+        API-->>User: JSON Payload Anomalies Breakdown Narrative
     end
 ```
 
