@@ -146,85 +146,92 @@ All 10 tests cover: amount cleaning, date normalisation, deduplication, median o
 
 ```mermaid
 graph TD
-    %% Colors and Styles %%
-    classDef client fill:#eef2f7,stroke:#3b82f6,stroke-width:2px;
-    classDef web fill:#e0f2fe,stroke:#0284c7,stroke-width:2px;
-    classDef db fill:#ecfdf5,stroke:#059669,stroke-width:2px;
-    classDef queue fill:#fff7ed,stroke:#ea580c,stroke-width:2px;
-    classDef worker fill:#faf5ff,stroke:#7c3aed,stroke-width:2px;
-    classDef llm fill:#fdf2f8,stroke:#db2777,stroke-width:2px;
+    %% COLOR THEMES AND STYLES
+    classDef client fill:#3b82f6,color:#fff,stroke:#2563eb,stroke-width:2px,rx:8px,ry:8px;
+    classDef api fill:#10b981,color:#fff,stroke:#059669,stroke-width:2px,rx:8px,ry:8px;
+    classDef db fill:#f59e0b,color:#fff,stroke:#d97706,stroke-width:2px;
+    classDef queue fill:#ef4444,color:#fff,stroke:#dc2826,stroke-width:2px,rx:8px,ry:8px;
+    classDef worker fill:#8b5cf6,color:#fff,stroke:#7c3aed,stroke-width:2px,rx:8px,ry:8px;
+    classDef llm fill:#ec4899,color:#fff,stroke:#db2777,stroke-width:2px,rx:8px,ry:8px;
+    classDef decision fill:#6366f1,color:#fff,stroke:#4f46e5,stroke-width:2px;
+    classDef groupstyle fill:#f8fafc,stroke:#cbd5e1,stroke-width:2px,stroke-dasharray: 5 5;
 
-    subgraph Client Space
-        C[Client]:::client
+    %% TOP LEVEL GROUPS
+    subgraph ClientSpace [Client Application]
+        C[User Client]:::client
     end
 
-    subgraph FastAPI Web Service
-        API[FastAPI Router]:::web
-        Val{File is CSV}:::web
+    subgraph APILayer [FastAPI Backend Service]
+        API[FastAPI Router]:::api
+        Val{Is File CSV}:::decision
+        SaveFile[Save CSV to Disk]:::api
+        CreateJob[Create Job PENDING]:::api
     end
 
-    subgraph Messaging Broker
-        Redis[Redis Queue]:::queue
+    subgraph Broker [Message Broker]
+        Redis[Redis Task Queue]:::queue
     end
 
-    subgraph Celery Worker Service
-        Task[Process Transaction Job]:::worker
-        Clean[Data Cleaning]:::worker
-        Anomaly[Anomaly Checking]:::worker
-        UncatDecision{Has Uncategorised}:::worker
-        BatchLLM[Classify Transactions Batch]:::worker
-        NarrativeLLM[Generate Narrative Summary]:::worker
+    subgraph WorkerService [Celery Background Workers]
+        Task[Dequeue Job]:::worker
+        Clean[Data Normalisation]:::worker
+        Anomaly[Anomaly Detection Engine]:::worker
+        UncatDecision{Has Uncategorised}:::decision
+        BatchLLM[Batch Classification Request]:::worker
+        ComputeStats[Aggregate Job Statistics]:::worker
+        NarrativeLLM[Narrative Generation Request]:::worker
+        SaveTxns[Bulk Insert Transactions]:::worker
+        SaveSummary[Save Summary and Mark COMPLETED]:::worker
     end
 
-    subgraph Database Layer
-        Postgres[(PostgreSQL DB)]:::db
+    subgraph AILayer [Google AI Platform]
+        Gemini[Gemini Flash Model]:::llm
+        Mock[Rule Based Fallback]:::llm
     end
 
-    subgraph AI Foundation Layer
-        Gemini[Gemini 2.5 Flash API]:::llm
-        Mock[Fallback Classifier]:::llm
+    subgraph DataLayer [Storage Layer]
+        Postgres[(PostgreSQL Database)]:::db
     end
 
-    %% Upload Flow %%
-    C -->|1. POST /jobs/upload| API
+    %% ASSIGN STYLES TO SUBGRAPHS
+    class ClientSpace,APILayer,Broker,WorkerService,AILayer,DataLayer groupstyle;
+
+    %% WORKFLOW RELATIONSHIPS
+    C -- 1. POST /jobs/upload --> API
     API --> Val
-    Val -->|No| Reject[400 Bad Request]:::web
-    Val -->|Yes| SaveFile[Save CSV locally]:::web
-    SaveFile --> CreateJob[Create Job status pending]:::web
-    CreateJob -->|Write| Postgres
-    CreateJob -->|2. process_transaction_job.delay| Redis
-    Redis -->|3. Dequeue Job| Task
-
-    %% Worker Processing Pipeline %%
-    Task -->|Update status processing| Postgres
+    Val -- No --> Reject[Return 400 Error]:::api
+    Val -- Yes --> SaveFile
+    SaveFile --> CreateJob
+    CreateJob -- Write Job --> Postgres
+    CreateJob -- 2. push message --> Redis
+    
+    Redis -- 3. pull message --> Task
+    Task -- Update Processing --> Postgres
     Task --> Clean
     Clean --> Anomaly
     Anomaly --> UncatDecision
     
-    UncatDecision -->|Yes| BatchLLM
-    UncatDecision -->|No| SaveTxns
+    UncatDecision -- Yes --> BatchLLM
+    UncatDecision -- No --> SaveTxns
     
-    BatchLLM -->|Call with Key| Gemini
-    BatchLLM -->|Retry or Failure| Mock
-    Gemini -->|Returns JSON Categories| SaveTxns
-    Mock -->|Fallback Categories| SaveTxns
+    BatchLLM -- API Call --> Gemini
+    BatchLLM -- Network Error or Retry --> Mock
+    Gemini -- JSON Categories --> SaveTxns
+    Mock -- Fallback Categories --> SaveTxns
     
-    SaveTxns[Save Transactions to DB]:::worker -->|Write Rows| Postgres
-    SaveTxns --> ComputeStats[Calculate Aggregates]:::worker
+    SaveTxns -- Write 1000s of Rows --> Postgres
+    SaveTxns --> ComputeStats
     ComputeStats --> NarrativeLLM
     
-    NarrativeLLM -->|Call with Key| Gemini
-    NarrativeLLM -->|Retry or Failure| Mock
-    Gemini -->|Returns JSON Summary| SaveSummary
-    Mock -->|Fallback Summary| SaveSummary
+    NarrativeLLM -- Final API Call --> Gemini
+    NarrativeLLM -- Network Error or Retry --> Mock
+    Gemini -- JSON Narrative --> SaveSummary
+    Mock -- Fallback Narrative --> SaveSummary
     
-    SaveSummary[Save JobSummary and Complete]:::worker -->|Write Summary and status completed| Postgres
+    SaveSummary -- Write Final Data --> Postgres
 
-    %% Polling Flow %%
-    C -->|4. GET /jobs/job_id/status| API
-    API -->|Read Status| Postgres
-    C -->|5. GET /jobs/job_id/results| API
-    API -->|Read Transactions and Summary| Postgres
+    C -- 4. GET /status and /results --> API
+    API -- Read Data --> Postgres
 ```
 
 
