@@ -227,7 +227,7 @@ graph TD
     API -->|Read Transactions & Summary| Postgres
 ```
 
-```
+
 
 ### Deep Dive: Processing Sequence & LLM Retry Logic
 
