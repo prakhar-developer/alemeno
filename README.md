@@ -155,42 +155,42 @@ graph TD
     classDef llm fill:#fdf2f8,stroke:#db2777,stroke-width:2px;
 
     subgraph Client Space
-        C[Client / User]:::client
+        C["Client / User"]:::client
     end
 
     subgraph FastAPI Web Service
-        API[FastAPI Router]:::web
-        Val{File CSV?}:::web
+        API["FastAPI Router"]:::web
+        Val{"File CSV?"}:::web
     end
 
     subgraph Messaging Broker
-        Redis[Redis Queue]:::queue
+        Redis["Redis Queue"]:::queue
     end
 
     subgraph Celery Worker Service
-        Task[process_transaction_job]:::worker
-        Clean[Data Cleaning & Dedup]:::worker
-        Anomaly[Anomaly Checking]:::worker
-        UncatDecision{Has Uncategorised?}:::worker
-        BatchLLM[Classify Transactions Batch]:::worker
-        NarrativeLLM[Generate Narrative Summary]:::worker
+        Task["process_transaction_job"]:::worker
+        Clean["Data Cleaning & Dedup"]:::worker
+        Anomaly["Anomaly Checking"]:::worker
+        UncatDecision{"Has Uncategorised?"}:::worker
+        BatchLLM["Classify Transactions Batch"]:::worker
+        NarrativeLLM["Generate Narrative Summary"]:::worker
     end
 
     subgraph Database Layer
-        Postgres[(PostgreSQL DB)]:::db
+        Postgres[("PostgreSQL DB")]:::db
     end
 
     subgraph AI Foundation Layer
-        Gemini[Gemini 2.5 Flash API]:::llm
-        Mock[Fallback Classifier]:::llm
+        Gemini["Gemini 2.5 Flash API"]:::llm
+        Mock["Fallback Classifier"]:::llm
     end
 
     %% Upload Flow %%
     C -->|1. POST /jobs/upload| API
     API --> Val
-    Val -->|No| Reject[400 Bad Request]:::web
-    Val -->|Yes| SaveFile[Save CSV locally]:::web
-    SaveFile --> CreateJob[Create Job: status=pending]:::web
+    Val -->|No| Reject["400 Bad Request"]:::web
+    Val -->|Yes| SaveFile["Save CSV locally"]:::web
+    SaveFile --> CreateJob["Create Job: status=pending"]:::web
     CreateJob -->|Write| Postgres
     CreateJob -->|2. process_transaction_job.delay| Redis
     Redis -->|3. Dequeue Job| Task
@@ -209,8 +209,8 @@ graph TD
     Gemini -->|Returns JSON Categories| SaveTxns
     Mock -->|Fallback Categories| SaveTxns
     
-    SaveTxns[Save Transactions to DB]:::worker -->|Write Rows| Postgres
-    SaveTxns --> ComputeStats[Calculate Aggregates]:::worker
+    SaveTxns["Save Transactions to DB"]:::worker -->|Write Rows| Postgres
+    SaveTxns --> ComputeStats["Calculate Aggregates"]:::worker
     ComputeStats --> NarrativeLLM
     
     NarrativeLLM -->|Call with Key| Gemini
@@ -218,7 +218,7 @@ graph TD
     Gemini -->|Returns JSON Summary| SaveSummary
     Mock -->|Fallback Summary| SaveSummary
     
-    SaveSummary[Save JobSummary & Complete]:::worker -->|Write Summary & status=completed| Postgres
+    SaveSummary["Save JobSummary & Complete"]:::worker -->|Write Summary & status=completed| Postgres
 
     %% Polling Flow %%
     C -->|4. GET /jobs/job_id/status| API
@@ -235,11 +235,11 @@ graph TD
 sequenceDiagram
     autonumber
     actor User
-    participant API as FastAPI Web Server
-    participant DB as PostgreSQL
+    participant API as "FastAPI Web Server"
+    participant DB as "PostgreSQL"
     participant Redis
-    participant Worker as Celery Worker
-    participant LLM as Gemini API / Fallback
+    participant Worker as "Celery Worker"
+    participant LLM as "Gemini API / Fallback"
 
     User->>API: POST /jobs/upload (CSV)
     API->>DB: Insert Job (status: 'pending')
