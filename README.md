@@ -142,32 +142,91 @@ All 10 tests cover: amount cleaning, date normalisation, deduplication, median o
 
 ---
 
-## Architecture
+## Architecture & Workflow
 
+```mermaid
+graph TD
+    %% Colors and Styles %%
+    classDef client fill:#eef2f7,stroke:#3b82f6,stroke-width:2px;
+    classDef web fill:#e0f2fe,stroke:#0284c7,stroke-width:2px;
+    classDef db fill:#ecfdf5,stroke:#059669,stroke-width:2px;
+    classDef queue fill:#fff7ed,stroke:#ea580c,stroke-width:2px;
+    classDef worker fill:#faf5ff,stroke:#7c3aed,stroke-width:2px;
+    classDef llm fill:#fdf2f8,stroke:#db2777,stroke-width:2px;
+
+    subgraph Client Space
+        C[Client / User]:::client
+    end
+
+    subgraph FastAPI Web Service
+        API[FastAPI Router]:::web
+        Val{File CSV?}:::web
+    end
+
+    subgraph Messaging Broker
+        Redis[Redis Queue]:::queue
+    end
+
+    subgraph Celery Worker Service
+        Task[process_transaction_job]:::worker
+        Clean[Data Cleaning & Dedup]:::worker
+        Anomaly[Anomaly Checking]:::worker
+        UncatDecision{Has Uncategorised?}:::worker
+        BatchLLM[Classify Transactions Batch]:::worker
+        NarrativeLLM[Generate Narrative Summary]:::worker
+    end
+
+    subgraph Database Layer
+        Postgres[(PostgreSQL DB)]:::db
+    end
+
+    subgraph AI Foundation Layer
+        Gemini[Gemini 2.5 Flash API]:::llm
+        Mock[Fallback Classifier]:::llm
+    end
+
+    %% Upload Flow %%
+    C -->|1. POST /jobs/upload| API
+    API --> Val
+    Val -->|No| Reject[400 Bad Request]:::web
+    Val -->|Yes| SaveFile[Save CSV locally]:::web
+    SaveFile --> CreateJob[Create Job: status=pending]:::web
+    CreateJob -->|Write| Postgres
+    CreateJob -->|2. process_transaction_job.delay| Redis
+    Redis -->|3. Dequeue Job| Task
+
+    %% Worker Processing Pipeline %%
+    Task -->|Update status=processing| Postgres
+    Task --> Clean
+    Clean --> Anomaly
+    Anomaly --> UncatDecision
+    
+    UncatDecision -->|Yes| BatchLLM
+    UncatDecision -->|No| SaveTxns
+    
+    BatchLLM -->|Call with Key| Gemini
+    BatchLLM -->|Retry / Failure| Mock
+    Gemini -->|Returns JSON Categories| SaveTxns
+    Mock -->|Fallback Categories| SaveTxns
+    
+    SaveTxns[Save Transactions to DB]:::worker -->|Write Rows| Postgres
+    SaveTxns --> ComputeStats[Calculate Aggregates]:::worker
+    ComputeStats --> NarrativeLLM
+    
+    NarrativeLLM -->|Call with Key| Gemini
+    NarrativeLLM -->|Retry / Failure| Mock
+    Gemini -->|Returns JSON Summary| SaveSummary
+    Mock -->|Fallback Summary| SaveSummary
+    
+    SaveSummary[Save JobSummary & Complete]:::worker -->|Write Summary & status=completed| Postgres
+
+    %% Polling Flow %%
+    C -->|4. GET /jobs/job_id/status| API
+    API -->|Read Status| Postgres
+    C -->|5. GET /jobs/job_id/results| API
+    API -->|Read Transactions & Summary| Postgres
 ```
-Client
-  │  POST /jobs/upload (CSV)
-  ▼
-FastAPI Web Server ──► PostgreSQL (Job record: status=pending)
-  │                          │
-  │  task.delay(job_id)      │
-  ▼                          │
-Redis (Celery Queue)         │
-  │                          │
-  ▼                          │
-Celery Worker ───────────────┘
-  │  1. clean_and_parse_csv()   — dedup, normalise dates/amounts/casing
-  │  2. detect_anomalies()      — 3×median outlier + domestic-USD rule
-  │  3. classify_transactions_batch() — batched Gemini call (≤50/batch)
-  │  4. generate_narrative_summary()  — single Gemini call, JSON output
-  │  5. Save Transaction rows + JobSummary to PostgreSQL
-  │  6. Set job.status = "completed"
-  ▼
-PostgreSQL
-  │
-  ▼
-Client polls GET /jobs/{id}/status → GET /jobs/{id}/results
-```
+
 
 ### Data Model
 
