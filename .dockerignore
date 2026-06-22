@@ -1,0 +1,37 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Uploaded files & data
+uploads/
+*.csv
+
+# Assignment PDF
+*.pdf
+
+# Git
+.git/
+.gitignore
+
+# Editor & OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Tests (uncomment to exclude from production image)
+# tests/
+
+# Env files (injected at runtime)
+.env
+
+# README & docs
+README.md

@@ -1,0 +1,23 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Caches
+.pytest_cache/
+
+# Environments
+.venv/
+venv/
+env/
+
+# Sensitive files
+.env
+
+# Local upload data
+uploads/
+*.csv
+
+# OS metadata
+.DS_Store
+Thumbs.db
