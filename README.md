@@ -365,6 +365,40 @@ Why not process the CSV synchronously in the FastAPI endpoint?
 
 ---
 
+## Request Lifecycle Trace
+
+This is the exact step-by-step path of a single CSV upload request through the system.
+
+### 1. Ingestion & Immediate Handoff
+- **Client** makes a `POST /jobs/upload` request attaching `transactions.csv`.
+- **FastAPI** (`app/main.py`) validates the file extension and reads the file into memory.
+- FastAPI writes the raw file to the local Docker volume `/workspace/uploads/`.
+- FastAPI creates a new `Job` record in **PostgreSQL** via SQLAlchemy, setting `status="pending"`.
+- FastAPI calls `process_transaction_job.delay(job_id)`. This serializes the `job_id` into a JSON message and pushes it to the **Redis** broker queue.
+- **API Response:** FastAPI immediately returns `HTTP 201 Created` with the `job_id`. *(Total synchronous time: ~50ms).*
+
+### 2. Asynchronous Processing & AI Augmentation
+- The **Celery Worker** process continuously polls Redis. It pops the message and begins executing `process_transaction_job` (`app/tasks.py`).
+- **Worker** updates the Postgres `Job` record to `status="processing"`.
+- **Worker** reads the CSV from the disk volume using **Pandas**.
+- **Data Normalization:** The `clean_and_parse_csv()` utility drops duplicate rows, standardizes datetime strings into ISO 8601 objects, and strips currency symbols (`$`, `,`) casting amounts to floats.
+- **Anomaly Engine:** `detect_anomalies()` calculates the mathematical median for each `account_id` and flags rows exceeding 3x the median. It also flags transactions in USD mapped to predefined domestic Indian merchants.
+- **AI Categorization:** The worker identifies all transactions with the category "Uncategorised". It chunks them into blocks of 50 and fires a synchronous `POST` request to the **Gemini 1.5 Flash** REST API.
+- *Retry Branch:* If the Gemini API returns a 503/429, `tenacity` intercepts the exception, sleeps for exponentially increasing durations, and retries up to 3 times. If it still fails, the fallback rules engine kicks in to prevent job death.
+
+### 3. Data Persistence & Aggregation
+- With clean amounts, flagged anomalies, and AI categories resolved, the Worker iterates over the DataFrame and executes a bulk `db.add_all()` to insert the rows into the Postgres `transactions` table.
+- The Worker runs Pandas `.sum()` and grouping operations to calculate the `total_spend_inr`, `total_spend_usd`, and `top_merchants`.
+- A final prompt containing these aggregates is sent to Gemini to generate a narrative paragraph and a `risk_level`.
+- The Worker writes the `JobSummary` record to Postgres and updates the original `Job` record to `status="completed"`, attaching a `completed_at` timestamp.
+
+### 4. Client Retrieval
+- **Client** makes a `GET /jobs/{job_id}/results` request.
+- **FastAPI** queries Postgres for the `Job` (to ensure it is completed), the `transactions` linked to the job, and the `job_summary`.
+- FastAPI dynamically builds the category spend breakdown grouping, serializes the ORM objects through **Pydantic** models (stripping away internal DB IDs), and returns the final polished JSON payload.
+
+---
+
 ## Scale Analysis
 
 ### The Breaking Point — Where 100× Traffic Breaks This System
