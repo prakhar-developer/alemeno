@@ -342,6 +342,29 @@ sequenceDiagram
 
 ---
 
+## Technical Reasoning & Design Choices
+
+### 1. Architectural Pattern (Asynchronous Worker)
+Why not process the CSV synchronously in the FastAPI endpoint?
+- **Timeout Prevention:** Large CSVs or slow LLM API calls would cause HTTP requests to timeout. By offloading to Celery, the API responds instantly with a `job_id`.
+- **Fault Tolerance:** If the LLM API drops the connection, Celery can retry the specific task using `tenacity` without the user having to re-upload the file.
+
+### 2. Database Schema (PostgreSQL)
+- **Separation of Concerns:** We split `jobs`, `transactions`, and `job_summaries` into distinct tables. This allows the API to poll the `jobs` table extremely fast without scanning heavy transaction data.
+- **Auditability:** Added `llm_raw_response` and `llm_failed` columns to the `transactions` table. For financial systems, having a strict audit trail of *why* an AI made a decision is a mandatory compliance requirement.
+
+### 3. Folder Structure
+- **Flat App Domain:** The `app/` directory separates configurations (`config.py`), database engine (`database.py`), models, and routers (`main.py`). This prevents circular imports, a common trap in FastAPI.
+- **Dedicated Tasks Module:** Keeping `tasks.py` separate from API routes ensures the Celery worker process only imports what it needs, keeping its memory footprint low.
+
+### 4. Specific Library Choices
+- **FastAPI + Pydantic:** Chosen for native async support, auto-generated Swagger UI, and strict data validation (`schemas.py`), which is critical for financial payloads.
+- **Celery + Redis:** The industry standard for robust Python background processing. Redis acts as a blazing-fast in-memory queue, ensuring jobs are never lost even if the worker restarts.
+- **Tenacity:** Used for exponential backoff during Gemini API calls. It elegantly handles transient HTTP 429 (Rate Limit) and 503 (Service Unavailable) errors without breaking the pipeline.
+- **Pandas:** Chosen for the cleaning phase. Vectorized operations (like `df.drop_duplicates()`) are orders of magnitude faster than iterating row-by-row in pure Python.
+
+---
+
 ## Scale Analysis
 
 ### The Breaking Point — Where 100× Traffic Breaks This System
